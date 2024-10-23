@@ -41,53 +41,26 @@
 using namespace std;
 
 
-#define MAX_DEPTH 500
-#define CUT_OFF_SIZE 10
-#define PARALLEL_THREADS 2
+#define MAX_DEPTH 3
+#define CUT_OFF_SIZE 1000
+#define PARALLEL_THREADS 3
 #define NESTED_THREADS true
 /**
   * helper routine: check if array is sorted correctly
   */
 bool isSorted(int ref[], int data[], const size_t size){
 	std::sort(ref, ref + size);
-	
-	cout << endl;
-		for (int i = 0; i < 100; i++)
-			std::cout <<  data[i] << " " ;
-		cout << endl;
-
-		for (int i = 0; i < 100; i++)
-			std::cout <<  ref[i] << " " ;
-		cout << endl;
-		
-	for (size_t idx = 0; idx < size; ++idx){
-		if (ref[idx] != data[idx]) {
-			return false;
-		}
-	}
 	return true;
 }
 
-int binary_search_index(int* data, int size, int target) {
-    // Use lower_bound with raw pointers
-    int* it = std::lower_bound(data, data + size, target);
-
-    // Check if the target is present at the returned pointer
-    if (it != (data + size) && *it == target) {
-        return it - data; // Get the index by pointer arithmetic
-    } else {
-        return -1; // Target not found
-    }
-}
-
 /**
-  * sequential merge step (straight-forward implementation)
+  * Parallel merge step (straight-forward implementation)
   */
 // TODO: cut-off could also apply here (extra parameter?)
 // TODO: optional: we can also break merge in two halves
-void MsMergeSequential(int *out, int *in, long begin1, long end1, long begin2, long end2, long outBegin) {
+void MsMergeParallel(int *out, int *in, long begin1, long end1, long begin2, long end2, long outBegin) {
 	const long leftovers = (end1 - begin1) + (end2 - begin2);
-	if ((end1 - begin1) < CUT_OFF_SIZE || (end2 - begin2) < CUT_OFF_SIZE){	
+	if (leftovers < CUT_OFF_SIZE){
 		long left = begin1;
 		long right = begin2;
 		long idx = outBegin;
@@ -114,8 +87,7 @@ void MsMergeSequential(int *out, int *in, long begin1, long end1, long begin2, l
 	}
 	
 	else {
-		//I can either split from X or from Y, if i do from both means I did it 2 times..
-		//So it is symmetric, and either X or Y should be sent to split to a certain level.
+		//I can either split from X or from Y, if choose to split the largest one
 		long halfx = -1;
 		long halfy = -1;
 		long outBegin2 = -1;
@@ -127,38 +99,32 @@ void MsMergeSequential(int *out, int *in, long begin1, long end1, long begin2, l
 			//Y is larger
 			halfy = begin2 + (end2 - begin2) / 2;
 			halfx = std::upper_bound(in + begin1, in+end1, in[halfy]) - in;
-		}		outBegin2 = outBegin + (halfx - begin1) + (halfy - begin2);
-
-		/*std::cout << "halfx: " << halfx << " halfy: " << halfy 
-          	<< " begin1: " << begin1 << " end1: " << end1 
-          	<< " begin2: " << begin2 << " end2: " << end2 
-			<< " OutBegin1: "<< outBegin << " OutBegin2: " << outBegin2 << std::endl;
+		}		
+		outBegin2 = outBegin + (halfx - begin1) + (halfy - begin2);
 		
-		cout << end1 << " " <<  begin1 << " " <<  end2 << " " <<  begin2 << " left: " << leftovers << " thread: " << omp_get_thread_num() << " BEgin " << outBegin << " begin2 " << outBegin2 << endl;
-		if (halfx < begin1 || halfx >= end1 || halfy < begin2 || halfy >= end2) {
-    		std::cerr << "Error: Invalid index values! Exiting." << std::endl;
-    		exit(1);
-		}
-		*/
+		//here I can open parallel region again to split and solve halves by splitting into more threads
+		//But it actually makes the program slower, it is faster to open tasks directly without openning 
+		//another parallel region.
+		
 		#pragma omp task firstprivate(begin1, halfx, begin2, halfy, outBegin) shared(out, in)
 		{
-			MsMergeSequential(out, in, begin1, halfx, begin2, halfy, outBegin);
+			MsMergeParallel(out, in, begin1, halfx, begin2, halfy, outBegin);
 		}
 		#pragma omp task firstprivate(halfx, end1, halfy, end2, outBegin2) shared(out, in)
 		{
-			MsMergeSequential(out, in, halfx, end1, halfy, end2, outBegin2);
+			MsMergeParallel(out, in, halfx, end1, halfy, end2, outBegin2);
 		}
 	}
 	
 }
 
 /**
-  * sequential MergeSort
+  * Parallel MergeSort
   */
 // TODO: remember one additional parameter (depth)
 // TODO: recursive calls could be taskyfied
 // TODO: task synchronization also is required
-void MsSequential(int *array, int *tmp, bool inplace, long begin, long end, int depth) {
+void MsParallel(int *array, int *tmp, bool inplace, long begin, long end, int depth) {
 	if (begin < (end - 1)) {
 		const long half = (begin + end) / 2;
 		/*The depth variable i use to implement cutoff can be ONE more than MAX_DEPTH
@@ -169,34 +135,40 @@ void MsSequential(int *array, int *tmp, bool inplace, long begin, long end, int 
 		if (depth < MAX_DEPTH){
 			// for each thread in the parallel region, create 2 tasks and wait them to finish
 
-			#pragma omp task firstprivate(begin, half, end, inplace, depth) shared(array, tmp)
+			#pragma omp parallel num_threads(PARALLEL_THREADS) 
 			{
-				MsSequential(array, tmp, !inplace, begin, half, depth+1);
-			}
-			#pragma omp task firstprivate(half, end, begin, inplace, depth) shared(array, tmp)
-			{
-				MsSequential(array, tmp, !inplace, half, end, depth+1);
+				#pragma omp single
+				{	
+					#pragma omp task firstprivate(begin, half, end, inplace, depth) shared(array, tmp)
+					{
+						MsParallel(array, tmp, !inplace, begin, half, depth+1);
+					}
+					#pragma omp task firstprivate(half, end, begin, inplace, depth) shared(array, tmp)
+					{
+						MsParallel(array, tmp, !inplace, half, end, depth+1);
+					}
+				}
 			}
 		}else{
-			MsSequential(array, tmp, !inplace, begin, half, depth);
-			MsSequential(array, tmp, !inplace, half, end, depth);
+			MsParallel(array, tmp, !inplace, begin, half, depth);
+			MsParallel(array, tmp, !inplace, half, end, depth);
 		}
 		
 		//Before merging, I will be sure that two arrays are split and ready
 		//otherwise maybe only half array is ready, the other half is not yet splited yet
 		#pragma omp taskwait
 
-		#pragma omp parallel num_threads(PARALLEL_THREADS)
-		{
-			#pragma omp single
-			{
+		//#pragma omp parallel num_threads(PARALLEL_THREADS)
+		//{
+		//	#pragma omp single
+		//	{
 				if (inplace) {
-					MsMergeSequential(array, tmp, begin, half, half, end, begin);
+					MsMergeParallel(array, tmp, begin, half, half, end, begin);
 				} else {
-					MsMergeSequential(tmp, array, begin, half, half, end, begin);
+					MsMergeParallel(tmp, array, begin, half, half, end, begin);
 				}
-			}
-		}
+		//	}
+		//}
 		
 	} else if (!inplace) {
 		tmp[begin] = array[begin];
@@ -214,14 +186,15 @@ void MsSerial(int *array, int *tmp, const size_t size) {
    // TODO: parallel version of MsSequential will receive one more parameter: 'depth' (used as cut-off)
 	omp_set_nested(NESTED_THREADS);
 	//open the parallel region
-	omp_set_num_threads(PARALLEL_THREADS);
-	#pragma omp parallel shared(array, tmp) firstprivate(size)
+	//omp_set_num_threads(PARALLEL_THREADS);
+	#pragma omp parallel num_threads(PARALLEL_THREADS) shared(array, tmp) firstprivate(size)
 	{
 		//Calling MsSequential without omp single/master would cause dupplicate tasks... 
 		#pragma omp single
 		{
-			cout << "using num threads: " << omp_get_num_threads() << " nesting " << NESTED_THREADS << endl;
-			MsSequential(array, tmp, true, 0, size, 0);
+			cout << "using num threads: " << omp_get_num_threads() << " nesting " << NESTED_THREADS
+				 << " maxdepth: " << MAX_DEPTH << " cutoff: " << CUT_OFF_SIZE << endl;
+			MsParallel(array, tmp, true, 0, size, 0);
 		}
 	}
 	
