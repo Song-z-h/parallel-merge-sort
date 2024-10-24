@@ -50,50 +50,50 @@ using namespace std;
   */
 bool isSorted(int ref[], int data[], const size_t size){
 	std::sort(ref, ref + size);
+
+		/*cout << endl;
+		for (int i = 0; i < 100; i++)
+			std::cout <<  data[i] << " " ;
+		cout << endl;
+
+		for (int i = 0; i < 100; i++)
+			std::cout <<  ref[i] << " " ;
+		cout << endl;
+		*/
+
+
+	for (size_t idx = 0; idx < size; ++idx){
+		if (ref[idx] != data[idx]) {
+			return false;
+		}
+	}
 	return true;
 }
 
-int* findJustBigger(int* s, int* e, int target){
-	int* m = s + (e - s) / 2;
-	if ( e - s > 0){
+int findJustBigger(int* s, int* e, int target){
+	if ( e >= s){
+		int* m = s + (e - s) / 2;
 		if (*m == target){
-			while(*(m+1) == target) m++;
-			return m+1;
-		}else if (target > *m){
-			#pragma omp task firstprivate(target) shared(s, m)
-			{
+			//while(*(m+1) == target) m++;
+			return m - s;
+		}
+		if (target > *m){
+			//#pragma omp task firstprivate(target) shared(s, m)
+			//{
 				findJustBigger(m+1, e, target);
-			}
+			//}
+			//#pragma omp taskwait
 		}else if (target < *m){
-			#pragma omp task firstprivate(target) shared(s, m)
-			{
-				findJustBigger(s, m, target);
-			}
+			//#pragma omp task firstprivate(target) shared(s, m)
+			//{
+				findJustBigger(s, m-1, target);
+			//}
+			//#pragma omp taskwait
 		}
 	}
-	return s;
+	return 0;
 }
 
-int* findJustSmaller(int* s, int* e, int target){
-	int* m = s + (e - s) / 2;
-	if ( e - s > 0){
-		if (*m == target){
-			while(*(m-1) == target) m--;
-			return m;
-		}else if (target > *m){
-			#pragma omp task firstprivate(target) shared(s, m)
-			{
-				findJustSmaller(m+1, e, target);
-			}
-		}else if (target < *m){
-			#pragma omp task firstprivate(target) shared(s, m)
-			{
-				findJustSmaller(s, m, target);
-			}
-		}
-	}
-	return s;
-}
 
 /**
   * Parallel merge step (straight-forward implementation)
@@ -136,12 +136,15 @@ void MsMergeParallel(int *out, int *in, long begin1, long end1, long begin2, lon
 
 		if ((end1 - begin1) >= (end2 - begin2)){
 			 halfx = begin1 + (end1 - begin1) / 2;
-			 halfy = findJustBigger(in+begin2, in+end2, in[halfx]) - in;
+			 halfy = std::lower_bound(in + begin2, in + end2, in[halfx]) - in;
+			 //halfy = findJustBigger(in + begin2, in + end2, in[halfx]);
 		}else{
 			//Y is larger
 			halfy = begin2 + (end2 - begin2) / 2;
-			halfx = findJustSmaller(in + begin1, in+end1, in[halfy]) - in;
+			halfx = std::upper_bound(in + begin1, in+end1, in[halfy]) - in;
+			//halfx = findJustSmaller(in + begin1, in+end1, in[halfy]) - in;
 		}		
+		
 		outBegin2 = outBegin + (halfx - begin1) + (halfy - begin2);
 		
 		//here I can open parallel region again to split and solve halves by splitting into more threads
@@ -152,10 +155,12 @@ void MsMergeParallel(int *out, int *in, long begin1, long end1, long begin2, lon
 		{
 			MsMergeParallel(out, in, begin1, halfx, begin2, halfy, outBegin);
 		}
-		#pragma omp task firstprivate(halfx, end1, halfy, end2, outBegin2) shared(out, in)
-		{
+		//#pragma omp task firstprivate(halfx, end1, halfy, end2, outBegin2) shared(out, in)
+		//{
 			MsMergeParallel(out, in, halfx, end1, halfy, end2, outBegin2);
-		}
+		//}
+		#pragma omp taskwait
+
 	}
 	
 }

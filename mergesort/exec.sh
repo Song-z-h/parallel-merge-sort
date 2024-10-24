@@ -1,3 +1,3 @@
 #!/bin/bash
 
-make && ./mergesort-co 100000000
+make && ./mergesort-co 10000000
